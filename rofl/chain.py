@@ -109,7 +109,12 @@ class ChainState:
         return self.utxos.total()
 
 
-def replay(blocks, now: int | None = None, strict_time: bool = True) -> ChainState:
+def replay(
+    blocks,
+    now: int | None = None,
+    strict_time: bool = True,
+    skip_pow: bool = False,
+) -> ChainState:
     """
     Validate every block from genesis and return the resulting state.
 
@@ -125,7 +130,9 @@ def replay(blocks, now: int | None = None, strict_time: bool = True) -> ChainSta
         mtp = median_time_past(state.blocks)
         check_now = now if strict_time else block.timestamp
         try:
-            state.utxos = validate_block(block, prev, state.utxos, expected, mtp, check_now)
+            state.utxos = validate_block(
+                block, prev, state.utxos, expected, mtp, check_now, skip_pow=skip_pow
+            )
         except ConsensusError as exc:
             raise ConsensusError(f"block {i} ({block.block_hash()[:16]}…): {exc}") from None
         state.blocks.append(block)

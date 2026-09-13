@@ -2,3 +2,7 @@ rofl-wallet.json
 __pycache__/
 *.pyc
 .venv/
+*.so
+*.o
+bench_results.txt
+HANDOVER*.md

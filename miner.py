@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-ROFL miner. Standard library only -- no pip install, no dependencies.
+ROFL miner. Default solver is the fast CPU meet-in-the-middle in
+rofl.solver (C extension via gcc; numpy fallback). The original
+pow.solve_instance path is still available for comparison.
 
     python3 miner.py --miner YOUR_GITHUB_HANDLE --message "gm"
+    python3 miner.py --solver ref --workers 1   # reference, for comparison
 
 Mining happens entirely on your machine. When it finds a block it prints a
 submission line; paste that as a comment on the block issue and a GitHub
@@ -14,6 +17,7 @@ Action validates it and appends it to the chain.
 import argparse
 import base64
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -21,6 +25,7 @@ import urllib.request
 from rofl import chain as chainmod
 from rofl import crypto
 from rofl import pow as powfn
+from rofl import solver as fast_solver
 from rofl.consensus import (
     Block,
     ConsensusError,
@@ -105,29 +110,27 @@ def select_txs(mempool, state, height):
     return chosen, fees
 
 
-def mine(block: Block, k: int):
+def mine(block: Block, k: int, solver_name: str = "fast", workers=None):
     """
     Solve the k puzzles this block's difficulty demands.
 
-    Each puzzle is independent, so this is embarrassingly parallel and an
-    obvious place for a faster solver to win. The reference implementation
-    is deliberately plain meet-in-the-middle.
+    Each puzzle is independent. The default path uses the fast CPU solver
+    in rofl.solver and farms puzzles across processes. Pass solver_name="ref"
+    to compare against the original meet-in-the-middle in pow.solve_instance.
     """
+    if workers is None:
+        workers = os.cpu_count() or 1
     core = block.header_core()
-    solutions = []
+    solutions = [None] * k
     started = time.time()
     tried = 0
-    for j in range(k):
-        nonce = 0
-        while True:
-            numbers, target = powfn.instance(core, j, nonce)
-            subset = powfn.solve_instance(numbers, target)
-            tried += 1
-            if subset is not None:
-                solutions.append((nonce, subset))
-                break
-            nonce += 1
-        done = j + 1
+    done = 0
+    for j, nonce, subset, ntry in fast_solver.solve_puzzles_iter(
+        core, k, workers=workers, solver_name=solver_name
+    ):
+        solutions[j] = (nonce, subset)
+        tried += ntry
+        done += 1
         rate = (time.time() - started) / done
         sys.stderr.write(
             f"\r  puzzle {done}/{k}   {rate:.2f}s each   "
@@ -147,6 +150,18 @@ def main():
     ap.add_argument("--repo", default="ram0verflow/ram0verflow", help="repo to mine against")
     ap.add_argument("--local", action="store_true", help="use the local chain/ directory")
     ap.add_argument("--no-txs", action="store_true", help="mine an empty block, ignore mempool")
+    ap.add_argument(
+        "--solver",
+        choices=("fast", "ref"),
+        default="fast",
+        help="fast CPU solver (default) or the reference pow.solve_instance",
+    )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="parallel puzzle workers (default: all CPUs)",
+    )
     args = ap.parse_args()
 
     check_miner_name(args.miner)
@@ -166,7 +181,7 @@ def main():
         raise SystemExit(f"invalid payout address: {address}")
 
     blocks, mempool = load_chain(args)
-    state = chainmod.replay(blocks, strict_time=False)
+    state = chainmod.replay(blocks, strict_time=False, skip_pow=True)
     height = state.height + 1
     bits = state.next_bits()
     k = powfn.k_for_work(target_to_work(bits_to_target(bits)), height)
@@ -193,12 +208,17 @@ def main():
     print(f"ROFL miner  ·  building on {state.tip_hash[:16]}…  ·  height {height}")
     print(f"  difficulty {difficulty(bits):,.1f}   bits {bits:#010x}")
     print(f"  puzzles    {k} x subset-sum(n={powfn.N})")
+    workers = args.workers if args.workers is not None else (os.cpu_count() or 1)
+    backend = fast_solver.backend() if args.solver == "fast" else "ref"
+    print(f"  solver     {args.solver} ({backend})   workers {workers}")
     print(f"  reward     {format_amount(reward)} ROFL "
           f"(subsidy {format_amount(block_subsidy(height))} + fees {format_amount(fees)})")
     print(f"  txs        {len(txs)} from mempool")
     print()
 
-    solutions, tried, elapsed = mine(block, k)
+    solutions, tried, elapsed = mine(
+        block, k, solver_name=args.solver, workers=args.workers
+    )
     sys.stderr.write("\r" + " " * 78 + "\r")
     block.solution = powfn.encode_solutions(solutions)
 

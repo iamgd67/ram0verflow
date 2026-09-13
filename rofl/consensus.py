@@ -533,6 +533,7 @@ def validate_block(
     expected_bits: int,
     median_time_past: int,
     now: int,
+    skip_pow: bool = False,
 ) -> UTXOSet:
     """
     Validate a block in full and return the UTXO set that results from it.
@@ -581,7 +582,8 @@ def validate_block(
     if merkle_root(txids) != block.merkle_root:
         raise ConsensusError("merkle root does not commit to these transactions")
 
-    check_pow(block)
+    if not skip_pow:
+        check_pow(block)
 
     coinbase = block.txs[0]
     validate_tx_shape(coinbase)

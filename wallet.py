@@ -63,7 +63,7 @@ def cmd_address(args):
 
 
 def _state(args):
-    return chainmod.replay(chainmod.load_blocks(), strict_time=False)
+    return chainmod.replay(chainmod.load_blocks(), strict_time=False, skip_pow=True)
 
 
 def cmd_balance(args):
